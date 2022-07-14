@@ -654,9 +654,9 @@ def print_examples(example_iter, model, n=2, max_len=100,
     print()
     
     if src_vocab is not None and trg_vocab is not None:
-        src_eos_index = src_vocab.stoi[EOS_TOKEN]
-        trg_sos_index = trg_vocab.stoi[SOS_TOKEN]
-        trg_eos_index = trg_vocab.stoi[EOS_TOKEN]
+        src_eos_index = SPECIALS.index("</s>") #src_vocab.get_stoi[EOS_TOKEN] 
+        trg_sos_index = SPECIALS.index("<s>") #trg_vocab.get_stoi[SOS_TOKEN]
+        trg_eos_index = SPECIALS.index("</s>") #trg_vocab.get_stoi[EOS_TOKEN]
     else:
         src_eos_index = None
         trg_sos_index = 1
@@ -1225,7 +1225,7 @@ train_dataloader, valid_dataloader, test_dataloader = create_dataloaders(
         vocab_tgt,
         spacy_de,
         spacy_en,
-        batch_size=64,
+        batch_size=128,
         is_distributed=False,
     )
 
@@ -1428,3 +1428,13 @@ plot_heatmap(src, pred, pred_att)
 #   journal={https://bastings.github.io/annotated\_encoder\_decoder/},
 #   year={2018}
 # }```
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
