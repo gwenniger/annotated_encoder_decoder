@@ -7,7 +7,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.13.0
 #   kernelspec:
-#     display_name: Python 3
+#     display_name: Python 3 (ipykernel)
 #     language: python
 #     name: python3
 # ---
@@ -97,6 +97,45 @@ seed = 42
 np.random.seed(seed)
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
+
+# %%
+import warnings
+# Set to False to skip notebook execution (e.g. for debugging)
+warnings.filterwarnings("ignore")
+RUN_EXAMPLES = True
+
+# Some convenience helper functions used throughout the notebook
+# Taken from the annotated transformer project
+
+def is_interactive_notebook():
+    return __name__ == "__main__"
+
+
+def show_example(fn, args=[]):
+    if __name__ == "__main__" and RUN_EXAMPLES:
+        return fn(*args)
+
+
+def execute_example(fn, args=[]):
+    if __name__ == "__main__" and RUN_EXAMPLES:
+        fn(*args)
+
+
+class DummyOptimizer(torch.optim.Optimizer):
+    def __init__(self):
+        self.param_groups = [{"lr": 0}]
+        None
+
+    def step(self):
+        None
+
+    def zero_grad(self, set_to_none=False):
+        None
+
+
+class DummyScheduler:
+    def step(self):
+        None
 
 
 # %% [markdown]
@@ -465,6 +504,8 @@ def run_epoch(data_iter, model, loss_compute, print_every=50):
     print_tokens = 0
 
     for i, batch in enumerate(data_iter, 1):
+        if batch == None:
+            continue
         
         out, _, pre_output = model.forward(batch.src, batch.trg,
                                            batch.src_mask, batch.trg_mask,
@@ -723,47 +764,377 @@ plot_perplexity(dev_perplexities)
 #
 # For speed we only include short sentences, and we include a word in the vocabulary only if it occurs at least 5 times. In this case we also lowercase the data.
 #
+#
+#
 # If you have **issues** with torch text in the cell below (e.g. an `ascii` error), try running `export LC_ALL="en_US.UTF-8"` before you start `jupyter notebook`.
 
 # %%
-# For data loading.
+### THIIS IS THE OLD DATA LOADING CODE, BUT IT NO LONGER WORKS IN NEWER PYTORCH/TORCHTEXT VERSIONS 
+### THEREFORE WE REPLACE IT WITH CODE ADAPTED FROM THE ANNOTATED TRANSFORMER NOTEBOOK
+###
+
+# # For data loading.
+# from torchtext import data, datasets
+
+# if True:
+#     import spacy
+#     spacy_de = spacy.load('de')
+#     spacy_en = spacy.load('en')
+
+#     def tokenize_de(text):
+#         return [tok.text for tok in spacy_de.tokenizer(text)]
+
+#     def tokenize_en(text):
+#         return [tok.text for tok in spacy_en.tokenizer(text)]
+
+#     UNK_TOKEN = "<unk>"
+#     PAD_TOKEN = "<pad>"    
+#     SOS_TOKEN = "<s>"
+#     EOS_TOKEN = "</s>"
+#     LOWER = True
+    
+#     # we include lengths to provide to the RNNs
+#     SRC = data.Field(tokenize=tokenize_de, 
+#                      batch_first=True, lower=LOWER, include_lengths=True,
+#                      unk_token=UNK_TOKEN, pad_token=PAD_TOKEN, init_token=None, eos_token=EOS_TOKEN)
+#     TRG = data.Field(tokenize=tokenize_en, 
+#                      batch_first=True, lower=LOWER, include_lengths=True,
+#                      unk_token=UNK_TOKEN, pad_token=PAD_TOKEN, init_token=SOS_TOKEN, eos_token=EOS_TOKEN)
+
+#     MAX_LEN = 25  # NOTE: we filter out a lot of sentences for speed
+#     train_data, valid_data, test_data = datasets.IWSLT.splits(
+#         exts=('.de', '.en'), fields=(SRC, TRG), 
+#         filter_pred=lambda x: len(vars(x)['src']) <= MAX_LEN and 
+#             len(vars(x)['trg']) <= MAX_LEN)
+#     MIN_FREQ = 5  # NOTE: we limit the vocabulary to frequent words for speed
+#     SRC.build_vocab(train_data.src, min_freq=MIN_FREQ)
+#     TRG.build_vocab(train_data.trg, min_freq=MIN_FREQ)
+    
+#     PAD_INDEX = TRG.vocab.stoi[PAD_TOKEN]
+
+
+
+# %%
+import spacy
 from torchtext import data, datasets
+# Load spacy tokenizer models, download them if they haven't been
+# downloaded already
 
-if True:
-    import spacy
-    spacy_de = spacy.load('de')
-    spacy_en = spacy.load('en')
 
+def load_tokenizers():
+
+    try:
+        spacy_de = spacy.load("de_core_news_sm")
+    except IOError:
+        os.system("python -m spacy download de_core_news_sm")
+        spacy_de = spacy.load("de_core_news_sm")
+
+    try:
+        spacy_en = spacy.load("en_core_web_sm")
+    except IOError:
+        os.system("python -m spacy download en_core_web_sm")
+        spacy_en = spacy.load("en_core_web_sm")
+
+    return spacy_de, spacy_en
+
+
+# %%
+def tokenize(text, tokenizer):
+    return [tok.text for tok in tokenizer.tokenizer(text)]
+
+
+def yield_tokens(data_iter, tokenizer, index):
+    for from_to_tuple in data_iter:
+        yield tokenizer(from_to_tuple[index])
+        
+
+
+# %%
+from os.path import exists
+from torchtext.vocab import build_vocab_from_iterator
+from torchtext.data.functional import to_map_style_dataset
+from torch.utils.data import DataLoader
+
+PAD_TOKEN = "<pad>"   
+SPECIALS= ["<s>", "</s>", "<blank>", "<unk>",PAD_TOKEN]
+
+def build_vocabulary(spacy_de, spacy_en):
     def tokenize_de(text):
-        return [tok.text for tok in spacy_de.tokenizer(text)]
+        return tokenize(text, spacy_de)
 
     def tokenize_en(text):
-        return [tok.text for tok in spacy_en.tokenizer(text)]
+        return tokenize(text, spacy_en)
 
-    UNK_TOKEN = "<unk>"
-    PAD_TOKEN = "<pad>"    
-    SOS_TOKEN = "<s>"
-    EOS_TOKEN = "</s>"
-    LOWER = True
-    
-    # we include lengths to provide to the RNNs
-    SRC = data.Field(tokenize=tokenize_de, 
-                     batch_first=True, lower=LOWER, include_lengths=True,
-                     unk_token=UNK_TOKEN, pad_token=PAD_TOKEN, init_token=None, eos_token=EOS_TOKEN)
-    TRG = data.Field(tokenize=tokenize_en, 
-                     batch_first=True, lower=LOWER, include_lengths=True,
-                     unk_token=UNK_TOKEN, pad_token=PAD_TOKEN, init_token=SOS_TOKEN, eos_token=EOS_TOKEN)
+    print("Building German Vocabulary ...")
+    train, val, test = datasets.Multi30k(language_pair=("de", "en"))
+#     train, val, test = datasets.IWSLT2017(language_pair=("de", "en"))
+    vocab_src = build_vocab_from_iterator(
+        yield_tokens(train + val + test, tokenize_de, index=0),
+        min_freq=2,
+        specials=SPECIALS,
+    )
 
-    MAX_LEN = 25  # NOTE: we filter out a lot of sentences for speed
-    train_data, valid_data, test_data = datasets.IWSLT.splits(
-        exts=('.de', '.en'), fields=(SRC, TRG), 
-        filter_pred=lambda x: len(vars(x)['src']) <= MAX_LEN and 
-            len(vars(x)['trg']) <= MAX_LEN)
-    MIN_FREQ = 5  # NOTE: we limit the vocabulary to frequent words for speed
-    SRC.build_vocab(train_data.src, min_freq=MIN_FREQ)
-    TRG.build_vocab(train_data.trg, min_freq=MIN_FREQ)
+    print("Building English Vocabulary ...")
+    train, val, test = datasets.Multi30k(language_pair=("de", "en"))
+#     train, val, test = datasets.IWSLT2017(language_pair=("de", "en"))
+    vocab_tgt = build_vocab_from_iterator(
+        yield_tokens(train + val + test, tokenize_en, index=1),
+        min_freq=2,
+        specials=SPECIALS,
+    )
+
+    vocab_src.set_default_index(vocab_src["<unk>"])
+    vocab_tgt.set_default_index(vocab_tgt["<unk>"])
+
+    return vocab_src, vocab_tgt
+
+
+def load_vocab(spacy_de, spacy_en):
+    if not exists("vocab.pt"):
+        vocab_src, vocab_tgt = build_vocabulary(spacy_de, spacy_en)
+        torch.save((vocab_src, vocab_tgt), "vocab.pt")
+    else:
+        vocab_src, vocab_tgt = torch.load("vocab.pt")
+    print("Finished.\nVocabulary sizes:")
+    print(len(vocab_src))
+    print(len(vocab_tgt))
+    return vocab_src, vocab_tgt
+
+
+
+if is_interactive_notebook():
+    # global variables used later in the script
+    spacy_de, spacy_en = show_example(load_tokenizers)
+    vocab_src, vocab_tgt = show_example(load_vocab, args=[spacy_de, spacy_en])
     
-    PAD_INDEX = TRG.vocab.stoi[PAD_TOKEN]
+#print(" vocab_src.get_stoi(): " + str( vocab_src.get_stoi()))    
+#PAD_INDEX = vocab_src.get_stoi()[PAD_TOKEN]  ## Does not work somehow, perhaps specials are not
+# returned in get_stoi
+PAD_INDEX = SPECIALS.index(PAD_TOKEN)
+
+# %% [markdown]
+# ## Iterators
+# In the new torch text data paradigm, we need data iterators. These have been adapted from the (new)
+# annotated transformer project, with adaptations to this project.
+#
+# One of the main adaptations that needed to be made to the code is to adapt the collate_batch function so that it returns tuples with src and src_lengths paired, and tgt and tgt_lengths paired. Whereas the Transformer model code does not require these src_lengths, the Bahdenau model code does. Originally the Bahdenau model code by Bastings worked with BucketIterator, but this is no longer available in newer PyTorch versions. Hence things have to be fixed more manually in the collate function, as done below for the Transformer model and here adapted to also work for the Bahdenau model based on the code by Bastings.
+
+# %%
+from torch.nn.functional import pad
+import numpy
+
+def get_processed_examples_and_lengths(batch, src_pipeline, tgt_pipeline, src_vocab, tgt_vocab, device,
+                                          max_length):
+    """
+    This function produces processed source and target examples, in torch tensor format, for further processing
+    by the collate_batch function.
+    By collecting src and tgt lengths while processing these examples, and returning them in a list
+    we can use them when computing the necessary padding in the collate_batch function. 
+    This prevents double work.
+    """
+   
+
+    bs_id = torch.tensor([0], device=device)  # <s> token id
+    eos_id = torch.tensor([1], device=device)  # </s> token id
+   
+
+    processed_src_items_list, processed_tgt_items_list = [], []
+    src_lengths_list, tgt_lengths_list = [], []
+   
+    for i, (_src, _tgt) in enumerate(batch):
+        #print("example number in batch: " + str(i))
+        processed_src = torch.cat(
+            [
+                bs_id,
+                torch.tensor(
+                    src_vocab(src_pipeline(_src)),
+                    dtype=torch.int64,
+                    device=device,
+                ),
+                eos_id,
+            ],
+            0,
+        )
+      
+        processed_tgt = torch.cat(
+            [
+                bs_id,
+                torch.tensor(
+                    tgt_vocab(tgt_pipeline(_tgt)),
+                    dtype=torch.int64,
+                    device=device,
+                ),
+                eos_id,
+            ],
+            0,
+        )
+        
+        src_length =  len(processed_src)        
+        tgt_length =  len(processed_tgt)
+        
+        # Filter out examples that are too long on the source side or target side
+        if src_length <= max_length and tgt_length <= max_length:
+            processed_src_items_list.append(processed_src)
+            processed_tgt_items_list.append(processed_tgt)
+            tgt_lengths_list.append(tgt_length)
+            src_lengths_list.append(src_length)
+#         else:
+#             #print("src_length: " + str(src_length))
+    return processed_src_items_list, processed_tgt_items_list, src_lengths_list, tgt_lengths_list
+
+
+def collate_batch(
+    batch,
+    src_pipeline,
+    tgt_pipeline,
+    src_vocab,
+    tgt_vocab,
+    device,
+    max_padding=128,
+    pad_id=2,
+    max_length:int=25
+):
+    
+    src_list, tgt_list = [], []
+    processed_src_items_list, processed_tgt_items_list, src_lengths_list, tgt_lengths_list =\
+        get_processed_examples_and_lengths(batch, src_pipeline,
+        tgt_pipeline, src_vocab, tgt_vocab, device, max_length)
+    
+    if not processed_src_items_list:
+        # list is empty
+        return None
+    
+    print("batch size after filtering items: " + str(len(processed_src_items_list)))
+   
+    #print("src_lengths_list: " + str(src_lengths_list))
+    max_padding_source = max(src_lengths_list)
+
+    for processed_src, src_length in zip(processed_src_items_list, src_lengths_list):
+        src_list.append(
+            # warning - overwrites values for negative values of padding - len
+            pad(
+                processed_src,
+                (
+                    0,
+                    #max_padding - src_length,
+                    max_padding_source - src_length,
+                ),
+                value=pad_id,
+            )
+        )
+    for processed_tgt, tgt_length in zip(processed_tgt_items_list, tgt_lengths_list):
+        tgt_list.append(
+            pad(
+                processed_tgt,
+                (0, max_padding - tgt_length,
+                ),
+                value=pad_id,
+            )
+        )
+        #print(" src_length:" + str(src_length))
+        #print(" tgt_length:" + str(tgt_length))
+
+    
+    # Determine a sorting order so that elements are sorted by the src length, increasing 
+    # https://stackoverflow.com/questions/7851077/how-to-return-index-of-a-sorted-list
+    #sorting_order  = numpy.argsort(src_lengths_list).reverse() # supposedly faster than with sorte
+    sorting_order = sorted(range(len(src_lengths_list)), key=lambda k: src_lengths_list[k], reverse=True)
+    # Reorder all the lists according to sorting order
+    src_lengths_list = [src_lengths_list[i] for i in sorting_order]
+    tgt_lengths_list = [tgt_lengths_list[i] for i in sorting_order]
+    src_list = [src_list[i] for i in sorting_order]
+    tgt_list = [tgt_list[i] for i in sorting_order]
+        
+    # Convert int lists to torch tensors
+    src_lengths = torch.tensor(src_lengths_list,dtype=torch.int)
+    tgt_lengths = torch.tensor(tgt_lengths_list,dtype=torch.int)
+            
+    src = torch.stack(src_list)
+    tgt = torch.stack(tgt_list)
+    #return (src, tgt)
+    return ((src,src_lengths), (tgt, tgt_lengths))
+
+
+# %%
+def create_dataloaders(
+    device,
+    vocab_src,
+    vocab_tgt,
+    spacy_de,
+    spacy_en,
+    batch_size=12000,
+    max_padding=128,
+    is_distributed=True,
+):
+    # def create_dataloaders(batch_size=12000):
+    def tokenize_de(text):
+        return tokenize(text, spacy_de)
+
+    def tokenize_en(text):
+        return tokenize(text, spacy_en)
+
+    def collate_fn(batch):
+        return collate_batch(
+            batch,
+            tokenize_de,
+            tokenize_en,
+            vocab_src,
+            vocab_tgt,
+            device,
+            max_padding=max_padding,
+            pad_id=vocab_src.get_stoi()["<blank>"],
+        )
+
+#     train_iter, valid_iter, test_iter = datasets.Multi30k(
+#         language_pair=("de", "en")
+    # TODO: Filter sentences by length
+#     train_iter, valid_iter, test_iter = datasets.IWSLT2017(
+#         language_pair=("de", "en")
+#     )
+    
+    train_iter, valid_iter, test_iter = datasets.Multi30k(language_pair=("de", "en"))
+    
+    
+
+    train_iter_map = to_map_style_dataset(
+        train_iter
+    )  # DistributedSampler needs a dataset len()
+    train_sampler = (
+        DistributedSampler(train_iter_map) if is_distributed else None
+    )
+    valid_iter_map = to_map_style_dataset(valid_iter)
+    valid_sampler = (
+        DistributedSampler(valid_iter_map) if is_distributed else None
+    )
+    test_iter_map = to_map_style_dataset(test_iter)
+    test_sampler = (
+        DistributedSampler(test_iter_map) if is_distributed else None
+    )
+
+    
+
+    train_dataloader = DataLoader(
+        train_iter_map,
+        batch_size=batch_size,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
+        collate_fn=collate_fn,
+    )
+    valid_dataloader = DataLoader(
+        valid_iter_map,
+        batch_size=batch_size,
+        shuffle=(valid_sampler is None),
+        sampler=valid_sampler,
+        collate_fn=collate_fn,
+    )
+    test_dataloader = DataLoader(
+        test_iter_map,
+        batch_size=batch_size,
+        shuffle=(test_sampler is None),
+        sampler=test_sampler,
+        collate_fn=collate_fn,
+    )
+    return train_dataloader, valid_dataloader, test_dataloader
 
 
 # %% [markdown]
@@ -812,17 +1183,22 @@ print_data_info(train_data, valid_data, test_data, SRC, TRG)
 # For validation, we would run into trouble if we want to compare our translations with some external file that was not sorted. Therefore we simply set the validation batch size to 1, so that we can keep it in the original order.
 
 # %%
-train_iter = data.BucketIterator(train_data, batch_size=64, train=True, 
-                                 sort_within_batch=True, 
-                                 sort_key=lambda x: (len(x.src), len(x.trg)), repeat=False,
-                                 device=DEVICE)
-valid_iter = data.Iterator(valid_data, batch_size=1, train=False, sort=False, repeat=False, 
-                           device=DEVICE)
+# train_iter = data.BucketIterator(train_data, batch_size=64, train=True, 
+#                                  sort_within_batch=True, 
+#                                  sort_key=lambda x: (len(x.src), len(x.trg)), repeat=False,
+#                                  device=DEVICE)
+# valid_iter = data.Iterator(valid_data, batch_size=1, train=False, sort=False, repeat=False, 
+#                            device=DEVICE)
 
 
 def rebatch(pad_idx, batch):
     """Wrap torchtext batch into our own Batch class for pre-processing"""
-    return Batch(batch.src, batch.trg, pad_idx)
+    
+    if batch == None:
+        return None
+    
+    src, tgt = batch 
+    return Batch(src, tgt, pad_idx)
 
 
 # %% [markdown]
@@ -833,7 +1209,22 @@ def rebatch(pad_idx, batch):
 # On a Titan X GPU, this runs at ~18,000 tokens per second with a batch size of 64.
 
 # %%
+# Adapted to work with dataloaders instead of BucketIterator etc
+
+train_dataloader, valid_dataloader, test_dataloader = create_dataloaders(
+        torch.device("cpu"),
+        vocab_src,
+        vocab_tgt,
+        spacy_de,
+        spacy_en,
+        batch_size=128,
+        is_distributed=False,
+    )
+
 def train(model, num_epochs=10, lr=0.0003, print_every=100):
+    
+    pad_idx = vocab_tgt["<blank>"]
+        
     """Train a model on IWSLT"""
     
     if USE_CUDA:
@@ -849,17 +1240,18 @@ def train(model, num_epochs=10, lr=0.0003, print_every=100):
       
         print("Epoch", epoch)
         model.train()
-        train_perplexity = run_epoch((rebatch(PAD_INDEX, b) for b in train_iter), 
+        train_perplexity = run_epoch((rebatch(pad_idx, b) for b in train_dataloader), 
                                      model,
                                      SimpleLossCompute(model.generator, criterion, optim),
                                      print_every=print_every)
         
+        
         model.eval()
         with torch.no_grad():
             print_examples((rebatch(PAD_INDEX, x) for x in valid_iter), 
-                           model, n=3, src_vocab=SRC.vocab, trg_vocab=TRG.vocab)        
+                           model, n=3, src_vocab=vocab_src, trg_vocab=vocab_tgt)        
 
-            dev_perplexity = run_epoch((rebatch(PAD_INDEX, b) for b in valid_iter), 
+            dev_perplexity = run_epoch((rebatch(pad_idx, b) for b in valid_dataloader), 
                                        model, 
                                        SimpleLossCompute(model.generator, criterion, None))
             print("Validation perplexity: %f" % dev_perplexity)
@@ -868,9 +1260,8 @@ def train(model, num_epochs=10, lr=0.0003, print_every=100):
     return dev_perplexities
         
 
-
 # %%
-model = make_model(len(SRC.vocab), len(TRG.vocab),
+model = make_model(len(vocab_src), len(vocab_tgt),
                    emb_size=256, hidden_size=256,
                    num_layers=1, dropout=0.2)
 dev_perplexities = train(model, print_every=100)
@@ -914,7 +1305,7 @@ print(bleu)
 # The references are the tokenized versions, but they should not contain out-of-vocabulary UNKs that our network might have seen. So we'll take the references straight out of the `valid_data` object:
 
 # %%
-len(valid_data)
+len(valid_dataloader)
 
 # %%
 references = [" ".join(example.trg) for example in valid_data]
