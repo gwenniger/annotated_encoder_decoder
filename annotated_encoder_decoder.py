@@ -857,6 +857,7 @@ from torch.utils.data import DataLoader
 
 PAD_TOKEN = "<pad>"   
 SPECIALS= ["<s>", "</s>", "<blank>", "<unk>",PAD_TOKEN]
+MIN_FREQ = 5 
 
 def build_vocabulary(spacy_de, spacy_en):
     def tokenize_de(text):
@@ -867,19 +868,19 @@ def build_vocabulary(spacy_de, spacy_en):
 
     print("Building German Vocabulary ...")
     train, val, test = datasets.Multi30k(language_pair=("de", "en"))
-#     train, val, test = datasets.IWSLT2017(language_pair=("de", "en"))
+#     train, val, test = datasets.IWSLT2016(language_pair=("de", "en"))
     vocab_src = build_vocab_from_iterator(
         yield_tokens(train + val + test, tokenize_de, index=0),
-        min_freq=2,
+        min_freq=MIN_FREQ,
         specials=SPECIALS,
     )
 
     print("Building English Vocabulary ...")
     train, val, test = datasets.Multi30k(language_pair=("de", "en"))
-#     train, val, test = datasets.IWSLT2017(language_pair=("de", "en"))
+#     train, val, test = datasets.IWSLT2016(language_pair=("de", "en"))
     vocab_tgt = build_vocab_from_iterator(
         yield_tokens(train + val + test, tokenize_en, index=1),
-        min_freq=2,
+        min_freq=MIN_FREQ,
         specials=SPECIALS,
     )
 
@@ -1006,7 +1007,7 @@ def collate_batch(
     
     print("batch size after filtering items: " + str(len(processed_src_items_list)))
    
-    #print("src_lengths_list: " + str(src_lengths_list))
+   
     max_padding_source = max(src_lengths_list)
 
     for processed_src, src_length in zip(processed_src_items_list, src_lengths_list):
@@ -1041,6 +1042,7 @@ def collate_batch(
     sorting_order = sorted(range(len(src_lengths_list)), key=lambda k: src_lengths_list[k], reverse=True)
     # Reorder all the lists according to sorting order
     src_lengths_list = [src_lengths_list[i] for i in sorting_order]
+    #print("src_lengths_list after sorting: " + str(src_lengths_list))
     tgt_lengths_list = [tgt_lengths_list[i] for i in sorting_order]
     src_list = [src_list[i] for i in sorting_order]
     tgt_list = [tgt_list[i] for i in sorting_order]
@@ -1054,8 +1056,9 @@ def collate_batch(
     #return (src, tgt)
     return ((src,src_lengths), (tgt, tgt_lengths))
 
-
 # %%
+import torchtext
+
 def create_dataloaders(
     device,
     vocab_src,
@@ -1085,15 +1088,20 @@ def create_dataloaders(
             pad_id=vocab_src.get_stoi()["<blank>"],
         )
 
-#     train_iter, valid_iter, test_iter = datasets.Multi30k(
-#         language_pair=("de", "en")
+    train_iter, valid_iter, test_iter = datasets.Multi30k(
+        language_pair=("de", "en"))
     # TODO: Filter sentences by length
-#     train_iter, valid_iter, test_iter = datasets.IWSLT2017(
-#         language_pair=("de", "en")
-#     )
     
-    train_iter, valid_iter, test_iter = datasets.Multi30k(language_pair=("de", "en"))
+#     # See this issue: https://github.com/pytorch/text/issues/1091
+#     #url = 'https://drive.google.com/uc?id=1l5y6Giag9aRPwGtuZHswh3w5v3qEz8D8'
+#     url = "https://drive.google.com/uc?id=1l5y6Giag9aRPwGtuZHswh3w5v3qEz8D8"
+#     #print("datasets.IWSLT2016.URL: " + str(url))
+#     torchtext.utils.download_from_url(url)
     
+    # See this issue: we have to manually download, and put in the right location to make this work for now
+    # See: https://github.com/pytorch/text/issues/1676
+#     train_iter, valid_iter, test_iter = datasets.IWSLT2016(
+#         language_pair=("de", "en"))
     
 
     train_iter_map = to_map_style_dataset(
@@ -1217,7 +1225,7 @@ train_dataloader, valid_dataloader, test_dataloader = create_dataloaders(
         vocab_tgt,
         spacy_de,
         spacy_en,
-        batch_size=128,
+        batch_size=64,
         is_distributed=False,
     )
 
@@ -1248,7 +1256,7 @@ def train(model, num_epochs=10, lr=0.0003, print_every=100):
         
         model.eval()
         with torch.no_grad():
-            print_examples((rebatch(PAD_INDEX, x) for x in valid_iter), 
+            print_examples((rebatch(pad_idx, x) for x in valid_dataloader), 
                            model, n=3, src_vocab=vocab_src, trg_vocab=vocab_tgt)        
 
             dev_perplexity = run_epoch((rebatch(pad_idx, b) for b in valid_dataloader), 
@@ -1259,6 +1267,11 @@ def train(model, num_epochs=10, lr=0.0003, print_every=100):
         
     return dev_perplexities
         
+
+# %%
+import os
+dir_path = os.path.dirname(os.path.realpath("."))
+print("dir_path: " + str(dir_path))
 
 # %%
 model = make_model(len(vocab_src), len(vocab_tgt),

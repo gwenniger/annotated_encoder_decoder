@@ -1,5 +1,4 @@
 --find-links https://download.pytorch.org/whl/torch_stable.html
-
 pandas==1.3.5
 torch==1.11.0+cu113
 torchdata==0.3.0
@@ -11,3 +10,6 @@ flake8
 black
 GPUtil
 wandb
+# Additional requirements specific to the annotated_encoder_decoder
+matplotlib
+sacrebleu
