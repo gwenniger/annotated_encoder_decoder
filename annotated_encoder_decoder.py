@@ -869,7 +869,10 @@ from torchtext.data.functional import to_map_style_dataset
 from torch.utils.data import DataLoader
 
 PAD_TOKEN = "<blank>"   
-SPECIALS= ["<s>", "</s>", PAD_TOKEN, "<unk>"]
+EOS_TOKEN = "</s>"
+SOS_TOKEN = "<s>"
+UNK_TOKEN = "<unk>"
+SPECIALS= [SOS_TOKEN, EOS_TOKEN, PAD_TOKEN,UNK_TOKEN]
 MIN_FREQ = 5 
 
 def build_vocabulary(spacy_de, spacy_en):
@@ -1335,7 +1338,7 @@ print(bleu)
 len(valid_dataloader)
 
 # %%
-references = [" ".join(example.trg) for example in valid_data]
+references = [" ".join(rebatch(-1, example).trg) for example in valid_dataloader]
 print(len(references))
 print(references[0])
 
@@ -1352,21 +1355,24 @@ references[-2]
 # %%
 hypotheses = []
 alphas = []  # save the last attention scores
-for batch in valid_iter:
-  batch = rebatch(PAD_INDEX, batch)
-  pred, attention = greedy_decode(
+for batch in valid_dataloader:
+    if batch == None:
+        continue
+
+    batch = rebatch(PAD_INDEX, batch)
+    pred, attention = greedy_decode(
     model, batch.src, batch.src_mask, batch.src_lengths, max_len=25,
-    sos_index=TRG.vocab.stoi[SOS_TOKEN],
-    eos_index=TRG.vocab.stoi[EOS_TOKEN])
-  hypotheses.append(pred)
-  alphas.append(attention)
+    sos_index=vocab_tgt.get_stoi()[SOS_TOKEN],
+    eos_index=vocab_src.get_stoi()[EOS_TOKEN])
+    hypotheses.append(pred)
+    alphas.append(attention)
 
 # %%
 # we will still need to convert the indices to actual words!
 hypotheses[0]
 
 # %%
-hypotheses = [lookup_words(x, TRG.vocab) for x in hypotheses]
+hypotheses = [lookup_words(x, Tvocab) for x in hypotheses]
 hypotheses[0]
 
 # %%
