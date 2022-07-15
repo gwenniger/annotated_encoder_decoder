@@ -324,6 +324,13 @@ class Decoder(nn.Module):
         # unroll the decoder RNN for max_len steps
         for i in range(max_len):
             prev_embed = trg_embed[:, i].unsqueeze(1)
+            ### Sizes for debugging
+#             print("prev_embed.size(): " + str(prev_embed.size()))
+#             print("encoder_hidden.size(): " + str(encoder_hidden.size()))
+#             print("src_mask.size(): " + str(src_mask.size()))
+#             print("proj_key.size(): " + str(proj_key.size()))
+#             print("hidden.size(): " + str(hidden.size()))
+            
             output, hidden, pre_output = self.forward_step(
               prev_embed, encoder_hidden, src_mask, proj_key, hidden)
             decoder_states.append(output)
@@ -506,6 +513,9 @@ def run_epoch(data_iter, model, loss_compute, print_every=50):
     for i, batch in enumerate(data_iter, 1):
         if batch == None:
             continue
+            
+#         if i > 10:
+#             break
         
         out, _, pre_output = model.forward(batch.src, batch.trg,
                                            batch.src_mask, batch.trg_mask,
@@ -636,7 +646,7 @@ def greedy_decode(model, src, src_mask, src_lengths, max_len=100, sos_index=1, e
 
 def lookup_words(x, vocab=None):
     if vocab is not None:
-        x = [vocab.itos[i] for i in x]
+        x = [vocab.get_itos()[i] for i in x]
 
     return [str(t) for t in x]
 
@@ -663,6 +673,9 @@ def print_examples(example_iter, model, n=2, max_len=100,
         trg_eos_index = None
         
     for i, batch in enumerate(example_iter):
+        
+        if batch == None:
+            continue
       
         src = batch.src.cpu().numpy()[0, :]
         trg = batch.trg_y.cpu().numpy()[0, :]
@@ -855,8 +868,8 @@ from torchtext.vocab import build_vocab_from_iterator
 from torchtext.data.functional import to_map_style_dataset
 from torch.utils.data import DataLoader
 
-PAD_TOKEN = "<pad>"   
-SPECIALS= ["<s>", "</s>", "<blank>", "<unk>",PAD_TOKEN]
+PAD_TOKEN = "<blank>"   
+SPECIALS= ["<s>", "</s>", PAD_TOKEN, "<unk>"]
 MIN_FREQ = 5 
 
 def build_vocabulary(spacy_de, spacy_en):
@@ -1005,10 +1018,11 @@ def collate_batch(
         # list is empty
         return None
     
-    print("batch size after filtering items: " + str(len(processed_src_items_list)))
+    #print("batch size after filtering items: " + str(len(processed_src_items_list)))
    
    
     max_padding_source = max(src_lengths_list)
+    max_padding_target = max(tgt_lengths_list)
 
     for processed_src, src_length in zip(processed_src_items_list, src_lengths_list):
         src_list.append(
@@ -1027,7 +1041,7 @@ def collate_batch(
         tgt_list.append(
             pad(
                 processed_tgt,
-                (0, max_padding - tgt_length,
+                (0, max_padding_target - tgt_length,
                 ),
                 value=pad_id,
             )
@@ -1042,7 +1056,7 @@ def collate_batch(
     sorting_order = sorted(range(len(src_lengths_list)), key=lambda k: src_lengths_list[k], reverse=True)
     # Reorder all the lists according to sorting order
     src_lengths_list = [src_lengths_list[i] for i in sorting_order]
-    #print("src_lengths_list after sorting: " + str(src_lengths_list))
+#     print("src_lengths_list after sorting: " + str(src_lengths_list))
     tgt_lengths_list = [tgt_lengths_list[i] for i in sorting_order]
     src_list = [src_list[i] for i in sorting_order]
     tgt_list = [tgt_list[i] for i in sorting_order]
@@ -1065,7 +1079,7 @@ def create_dataloaders(
     vocab_tgt,
     spacy_de,
     spacy_en,
-    batch_size=12000,
+    batch_sizes=[12000,12000,12000],
     max_padding=128,
     is_distributed=True,
 ):
@@ -1123,21 +1137,21 @@ def create_dataloaders(
 
     train_dataloader = DataLoader(
         train_iter_map,
-        batch_size=batch_size,
+        batch_size=batch_sizes[0],
         shuffle=(train_sampler is None),
         sampler=train_sampler,
         collate_fn=collate_fn,
     )
     valid_dataloader = DataLoader(
         valid_iter_map,
-        batch_size=batch_size,
+        batch_size=batch_sizes[1],
         shuffle=(valid_sampler is None),
         sampler=valid_sampler,
         collate_fn=collate_fn,
     )
     test_dataloader = DataLoader(
         test_iter_map,
-        batch_size=batch_size,
+        batch_size=batch_sizes[2],
         shuffle=(test_sampler is None),
         sampler=test_sampler,
         collate_fn=collate_fn,
@@ -1170,10 +1184,10 @@ def print_data_info(train_data, valid_data, test_data, src_field, trg_field):
 
     print("First 10 words (src):")
     print("\n".join(
-        '%02d %s' % (i, t) for i, t in enumerate(src_field.vocab.itos[:10])), "\n")
+        '%02d %s' % (i, t) for i, t in enumerate(src_field.vocab.get_itos()[:10])), "\n")
     print("First 10 words (trg):")
     print("\n".join(
-        '%02d %s' % (i, t) for i, t in enumerate(trg_field.vocab.itos[:10])), "\n")
+        '%02d %s' % (i, t) for i, t in enumerate(trg_field.vocab.get_itos()[:10])), "\n")
 
     print("Number of German words (types):", len(src_field.vocab))
     print("Number of English words (types):", len(trg_field.vocab), "\n")
@@ -1225,13 +1239,13 @@ train_dataloader, valid_dataloader, test_dataloader = create_dataloaders(
         vocab_tgt,
         spacy_de,
         spacy_en,
-        batch_size=128,
+        batch_sizes=[128,1,1],
         is_distributed=False,
     )
 
 def train(model, num_epochs=10, lr=0.0003, print_every=100):
     
-    pad_idx = vocab_tgt["<blank>"]
+    pad_idx = SPECIALS.index("<blank>")
         
     """Train a model on IWSLT"""
     
