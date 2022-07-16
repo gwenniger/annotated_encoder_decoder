@@ -1137,7 +1137,9 @@ def create_dataloaders(
     )
 
     
-
+    # Got rid of the iter maps for validation and test, use the normal iters instead,
+    # because the order of iteration is not stable with the iter_map, which messes up the
+    # evaluation otherwise (because you would expect a stable order there)
     train_dataloader = DataLoader(
         train_iter_map,
         batch_size=batch_sizes[0],
@@ -1146,21 +1148,40 @@ def create_dataloaders(
         collate_fn=collate_fn,
     )
     valid_dataloader = DataLoader(
-        valid_iter_map,
+#         valid_iter_map,
+        valid_iter,
         batch_size=batch_sizes[1],
-        shuffle=(valid_sampler is None),
+#         shuffle=(valid_sampler is None),
+        shuffle=False,
         sampler=valid_sampler,
         collate_fn=collate_fn,
     )
     test_dataloader = DataLoader(
-        test_iter_map,
+#         test_iter_map,
+        test_iter,
         batch_size=batch_sizes[2],
-        shuffle=(test_sampler is None),
+#         shuffle=(test_sampler is None),
+        shuffle=False,
         sampler=test_sampler,
         collate_fn=collate_fn,
     )
     return train_dataloader, valid_dataloader, test_dataloader
 
+# %% [markdown]
+# ### Create the dataloaders
+
+# %%
+# Adapted to work with dataloaders instead of BucketIterator etc
+
+train_dataloader, valid_dataloader, test_dataloader = create_dataloaders(
+        torch.device("cpu"),
+        vocab_src,
+        vocab_tgt,
+        spacy_de,
+        spacy_en,
+        batch_sizes=[128,1,1],
+        is_distributed=False,
+    )
 
 # %% [markdown]
 # ### Let's look at the data
@@ -1168,35 +1189,139 @@ def create_dataloaders(
 # It never hurts to look at your data and some statistics.
 
 # %%
-def print_data_info(train_data, valid_data, test_data, src_field, trg_field):
+from collections import Counter
+import spacy
+
+train_iter, valid_iter, test_iter = datasets.Multi30k(
+        language_pair=("de", "en"))
+train_iter_map = to_map_style_dataset(train_iter)
+valid_iter_map = to_map_style_dataset(valid_iter)
+test_iter_map = to_map_style_dataset(test_iter)
+
+def get_num_examples(dataloader):
+    result = 0
+    for b in dataloader:
+        batch = rebatch(PAD_INDEX, b)
+        if batch is not None:
+            result += len(batch.src_lengths)
+    return result
+            
+def get_examples_src_tgt(dataloader, as_string: bool = True):
+    """
+    This method essentially reconstructs the lists of words from the batches. This is necessary, because 
+    it is not straightforward to loop over the data otherwise, in a correct way. 
+    Esssentially we have the DataLoaders, 
+    and can get the batches from these, which is what we use here. 
+    """
+    result = 0
+    for b in dataloader:
+        batch = rebatch(PAD_INDEX, b)
+        if batch is not None:
+            #print("batch.src.size(): " + str(batch.src.size()))
+            #print("batch.tgt.size(): " + str(batch.trg.size()))
+            num_batch_examples = batch.src.size(0)
+            #print("num batch examples: " + str(num_batch_examples))
+            for example_index in range(0, num_batch_examples):
+                source_words = lookup_words(batch.src[example_index][:], vocab_src)
+                target_words = lookup_words(batch.trg[example_index][:], vocab_tgt)
+                if as_string:
+                    src_string =  " ".join(source_words)
+                    print("src_string:" + src_string)
+                    tgt_string =  " ".join(target_words)
+                    yield src_string, tgt_string
+                else:
+#                     print("source words: " + str(source_words))
+#                     print("target words: " + str(target_words))
+                    yield source_words, target_words
+                
+def get_examples_src(dataloader, as_string: bool = True):
+    for src, tgt in  get_examples_src_tgt(dataloader, as_string):
+        yield src
+        
+def get_examples_tgt(dataloader, as_string: bool = True):
+    for src, tgt in  get_examples_src_tgt(dataloader, as_string):
+        yield tgt
+                                             
+spacy_de = spacy.load("de_core_news_sm")
+spacy_en = spacy.load("en_core_web_sm")
+
+def tokenize_de(text):
+    return [tok.text for tok in spacy_de.tokenizer(text)]
+
+def tokenize_en(text):
+    return [tok.text for tok in spacy_en.tokenizer(text)]
+
+
+def print_data_info(train_dataloader, valid_dataloader, test_dataloader):
     """ This prints some useful stuff about our data sets. """
 
     print("Data set sizes (number of sentence pairs):")
-    print('train', len(train_data))
-    print('valid', len(valid_data))
-    print('test', len(test_data), "\n")
+    # These statistics are more reliable, since they do not count sentences that are actually skipped
+    print('train', get_num_examples(train_dataloader))
+    print('valid', get_num_examples(valid_dataloader))
+    print('test', get_num_examples(test_dataloader), "\n")
+    # https://stackoverflow.com/questions/5384570/whats-the-shortest-way-to-count-the-number-of-items-in-a-generator-iterator
+    # This we can still do with the basic dataset iterators
+#     print('train', sum(1 for _ in train_iter))
+#     print('valid', sum(1 for _ in valid_iter))
+#     print('test', sum(1 for _ in test_iter), "\n")
 
     print("First training example:")
-    print("src:", " ".join(vars(train_data[0])['src']))
-    print("trg:", " ".join(vars(train_data[0])['trg']), "\n")
+    print("(Retrieved from the batches of the dataloader)")
+#     print("src:", " ".join(vars(train_dataloader[0])['src']))
+#     print("trg:", " ".join(vars(train_dataloader[0])['trg']), "\n")
+    #https://stackoverflow.com/questions/4741243/how-to-pick-just-one-item-from-a-generator
+    src_string, tgt_string = next(get_examples_src_tgt(train_dataloader, True))
+    print("src:",src_string , "\n")
+    print("trg:", tgt_string, "\n")
+    
+    
+    print("(directly from the train_iter)")
+    for source_target in train_iter:
+        print("src:",source_target[0] , "\n")
+        print("trg:", source_target[1], "\n")
+        break
 
+    
+    ### We use counters to get the frequencies, as frequencies are no longer available 
+    ### in the vocabulary, in the newer PyTorch versions
+    print("create counters...")
+    source_counter = Counter()
+    target_counter = Counter()
+    print("(We collect statistics for the validation set, to be faster)")
+    for _, (source_words, target_words) in enumerate(get_examples_src_tgt(valid_dataloader, False)):
+        source_counter.update(source_words)
+        target_counter.update(target_words)
+
+      # This gives somehow unexpected results: the first example is repeated every time somehow    
+#     for _, source_taget in enumerate(train_iter_map):
+#         source = source_target[0]
+#         target = source_target[1]
+#         print("source: " + str(source))
+#         print("target: " + str(target))
+#         source_counter.update(tokenize_de(source))
+#         target_counter.update(tokenize_en(target))
+    
+#     print("\n".join(["%10s %10d" % x for x in vocab_src.freqs.most_common(10)]), "\n")
+#     print("Most common words (trg):")
+#     print("\n".join(["%10s %10d" % x for x in vocab_tgt.freqs.most_common(10)]), "\n")
     print("Most common words (src):")
-    print("\n".join(["%10s %10d" % x for x in src_field.vocab.freqs.most_common(10)]), "\n")
+    print("\n".join(["%10s %10d" % x for x in source_counter.most_common(10)]), "\n")
     print("Most common words (trg):")
-    print("\n".join(["%10s %10d" % x for x in trg_field.vocab.freqs.most_common(10)]), "\n")
+    print("\n".join(["%10s %10d" % x for x in target_counter.most_common(10)]), "\n")
 
     print("First 10 words (src):")
     print("\n".join(
-        '%02d %s' % (i, t) for i, t in enumerate(src_field.vocab.get_itos()[:10])), "\n")
+        '%02d %s' % (i, t) for i, t in enumerate(vocab_src.get_itos()[:10])), "\n")
     print("First 10 words (trg):")
     print("\n".join(
-        '%02d %s' % (i, t) for i, t in enumerate(trg_field.vocab.get_itos()[:10])), "\n")
+        '%02d %s' % (i, t) for i, t in enumerate(vocab_tgt.get_itos()[:10])), "\n")
 
-    print("Number of German words (types):", len(src_field.vocab))
-    print("Number of English words (types):", len(trg_field.vocab), "\n")
+    print("Number of German words (types):", len(vocab_src))
+    print("Number of English words (types):", len(vocab_tgt), "\n")
     
     
-print_data_info(train_data, valid_data, test_data, SRC, TRG)
+print_data_info(train_dataloader, valid_dataloader, test_dataloader)
 
 # %% [markdown]
 # ## Iterators
@@ -1225,7 +1350,6 @@ def rebatch(pad_idx, batch):
     src, tgt = batch 
     return Batch(src, tgt, pad_idx)
 
-
 # %% [markdown]
 # ## Training the System
 #
@@ -1234,17 +1358,7 @@ def rebatch(pad_idx, batch):
 # On a Titan X GPU, this runs at ~18,000 tokens per second with a batch size of 64.
 
 # %%
-# Adapted to work with dataloaders instead of BucketIterator etc
 
-train_dataloader, valid_dataloader, test_dataloader = create_dataloaders(
-        torch.device("cpu"),
-        vocab_src,
-        vocab_tgt,
-        spacy_de,
-        spacy_en,
-        batch_sizes=[128,1,1],
-        is_distributed=False,
-    )
 
 def train(model, num_epochs=10, lr=0.0003, print_every=100):
     
@@ -1338,9 +1452,28 @@ print(bleu)
 len(valid_dataloader)
 
 # %%
-references = [" ".join(rebatch(-1, example).trg) for example in valid_dataloader]
+references_words = []
+for b in valid_dataloader:
+    #print("b " + str(b))
+    if b is not None:
+        batch = rebatch(PAD_INDEX, b)
+        # print("batch.trg.size():" + str(batch.trg.size()))
+        words = lookup_words(batch.trg[0][:], vocab_tgt)
+        references_words.append(words)
+    
+
+                          
+references = [" ".join(x) for x in references_words]                          
+
 print(len(references))
 print(references[0])
+
+# https://stackoverflow.com/questions/3845423/remove-empty-strings-from-a-list-of-strings
+# remove empty elements  (strings with length 0)  
+references =  [x for x in references if x]
+
+for reference in references:
+    print("reference: " + str(reference))
 
 # %%
 references[-2]
@@ -1353,33 +1486,46 @@ references[-2]
 # Note that `greedy_decode` will cut-off the sentence when it encounters the end-of-sequence symbol, if we provide it the index of that symbol.
 
 # %%
-hypotheses = []
+hypotheses_idx = []
 alphas = []  # save the last attention scores
+evaluation_inputs = []  # Collect the evaluation inputs for later use
 for batch in valid_dataloader:
     if batch == None:
         continue
-
+    
     batch = rebatch(PAD_INDEX, batch)
+    evaluation_inputs.append(batch.src)
     pred, attention = greedy_decode(
     model, batch.src, batch.src_mask, batch.src_lengths, max_len=25,
-    sos_index=vocab_tgt.get_stoi()[SOS_TOKEN],
-    eos_index=vocab_src.get_stoi()[EOS_TOKEN])
-    hypotheses.append(pred)
+    sos_index=SPECIALS.index(SOS_TOKEN),
+    eos_index=SPECIALS.index(EOS_TOKEN))
+    hypotheses_idx.append(pred)
     alphas.append(attention)
 
 # %%
 # we will still need to convert the indices to actual words!
-hypotheses[0]
+hypotheses_idx[0]
 
 # %%
-hypotheses = [lookup_words(x, Tvocab) for x in hypotheses]
-hypotheses[0]
+hypotheses_words = [lookup_words(x, vocab_tgt) for x in hypotheses_idx]
+print("len(hypotheses): " + str(len(hypotheses_words)))
+hypotheses_words[0]
+
+
 
 # %%
 # finally, the SacreBLEU raw scorer requires string input, so we convert the lists to strings
-hypotheses = [" ".join(x) for x in hypotheses]
+hypotheses = [" ".join(x) for x in hypotheses_words]
+        
 print(len(hypotheses))
 print(hypotheses[0])
+
+for hypothesis in hypotheses:
+    print("hypothesis: " + str(hypothesis))
+
+# remove empty elements    
+hypotheses =  [x for x in hypotheses if x]
+
 
 # %%
 # now we can compute the BLEU score!
@@ -1414,10 +1560,19 @@ def plot_heatmap(src, trg, scores):
 
 # %%
 # This plots a chosen sentence, for which we saved the attention scores above.
-idx = 5
-src = valid_data[idx].src + ["</s>"]
-trg = valid_data[idx].trg + ["</s>"]
-pred = hypotheses[idx].split() + ["</s>"]
+idx = 5  # Change this index to visualze attention for different examples
+
+### Old code, no longer works because valid_data is not available
+# src = valid_data[idx].src + ["</s>"]
+# trg = valid_data[idx].trg + ["</s>"]
+# pred = hypotheses[idx].split() + ["</s>"]
+print("evaluation_inputs[5].size(): " + str(evaluation_inputs[idx].size()))
+# Some tweaking is needed to get the right (parts of) these word lists again.
+# We don't want the start symbol here, so we start from index 1 for src and trg
+src = lookup_words((evaluation_inputs[idx])[0][:], vocab_src)[1:] #+ ["</s>"]
+trg = references_words[idx][1:] + ["</s>"][1:]
+pred = hypotheses_words[idx] + ["</s>"]
+
 pred_att = alphas[idx][0].T[:, :len(pred)]
 print("src", src)
 print("ref", trg)
@@ -1448,13 +1603,3 @@ plot_heatmap(src, pred, pred_att)
 #   journal={https://bastings.github.io/annotated\_encoder\_decoder/},
 #   year={2018}
 # }```
-
-# %%
-
-# %%
-
-# %%
-
-# %%
-
-# %%
