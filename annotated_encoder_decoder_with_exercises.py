@@ -20,6 +20,16 @@
 # The idea is that going through both blog posts will make you familiar with two very influential sequence-to-sequence architectures. If you have any comments or suggestions, please let me know: [@BastingsJasmijn](https://twitter.com/BastingsJasmijn).
 
 # %% [markdown]
+# ## Note on this version
+# This version of the project has been adapted by G. Maillette de Buy Wenniger to be compatible with modern 
+# PyTorch versions. This entails a similar update as was done for the original annotated transformer project,
+# see: http://nlp.seas.harvard.edu/annotated-transformer/.
+# In particular, various functions and classes from torchtext used in the original code are no longer available in 
+# current PyTorch versions, including BucketIterator, Field etc. 
+# To deal these changes we had to write our own DataLoaders including custom collate functions, and 
+# implement the functionality as much as possible in those DataLoaders.
+
+# %% [markdown]
 # # Model Architecture
 #
 # We will model the probability $p(Y\mid X)$ of a target sequence $Y=(y_1, \dots, y_{N})$ given a source sequence $X=(x_1, \dots, x_M)$ directly with a neural network: an Encoder-Decoder.
