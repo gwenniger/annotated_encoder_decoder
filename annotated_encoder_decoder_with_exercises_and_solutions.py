@@ -1800,7 +1800,7 @@ def evaluate_model(model):
 print("Evaluate BiLSTM with attention model...")
 evaluate_model(bilstm_with_atttention_model)
 print("Evaluate BiGRU model...")
-#evaluate_model(bigru)
+evaluate_model(bigru)
 print("Evaluate BiLSTM model...")
 evaluate_model(bilstm_model)
 

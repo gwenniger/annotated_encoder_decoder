@@ -1666,7 +1666,7 @@ plot_heatmap(src, pred, pred_att)
 #
 
 # %%
-bilstm_with_atttention_model = make_model(ModelType.BIGRU_WITH_ATTENTION,
+bilstm_with_atttention_model = make_model(ModelType.BILSTM_WITH_ATTENTION,
                    len(vocab_src), len(vocab_tgt),
                    emb_size=256, hidden_size=256,
                    num_layers=1, dropout=0.2)
