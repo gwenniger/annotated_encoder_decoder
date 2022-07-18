@@ -1673,29 +1673,35 @@ print("ref", trg)
 print("pred", pred)
 plot_heatmap(src, pred, pred_att)
 
-# %%
-## Exercise: Experiments with different model types
-
->In this exercise you will test different variants of the BiGRU-with-attention model, namely:
->>    1. A nearly identical model in which the the BiGRU is replaced with a BiLSTM
->>    2. A similar BiGRU model, but without attention. Instead of using a weighted mean of the hidden states of the 
->>       encoder, it just always uses the last state of the encoder.
->>    3. A BiLSTM model. Similar to 2, but using again a BiLSTM in place of a BiGRU.
-
-> To do so, you will have to adapt the Encoder and Decoder classes in the right manner, 
-in order to implement these model variants.
-> To get you started and limit the coding work, a code scaffolding has already been provided, with 
-\#TODO and RuntimeErrors indicating places where the code should be adapted/augmented.
-
-Tips: The LSTM has a slightly different input and output as the GRU. In particular, it takes also a cell 
-state as input and produces ti as an output.
-See: https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html#torch.nn.LSTM
-        
-You can initialize it to zeros when providing it as first input, and you can create this zeros from the hidden 
-state tensor, using the torch.zeros_like method.
-
-https://pytorch.org/docs/stable/generated/torch.zeros_like.html
-
+# %% [markdown]
+# ## Exercise: Experiments with different model types
+#
+# >In this exercise you will test different variants of the BiGRU-with-attention model, namely:
+# >>    1. A nearly identical model in which the the BiGRU is replaced with a BiLSTM
+# >>    2. A similar BiGRU model, but without attention. Instead of using a weighted mean of the hidden states of the 
+# >>       encoder, it just always uses the last state of the encoder.
+# >>    3. A BiLSTM model. Similar to 2, but using again a BiLSTM in place of a BiGRU.
+#
+# > To do so, you will have to adapt the Encoder and Decoder classes in the right manner, 
+# in order to implement these model variants.
+# > To get you started and limit the coding work, a code scaffolding has already been provided, with 
+# \#TODO and RuntimeErrors indicating places where the code should be adapted/augmented.
+#
+# Tips: 
+# 1. The LSTM has a slightly different input and output as the GRU. In particular, it takes also a cell 
+# state as input and produces ti as an output.
+# See: https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html#torch.nn.LSTM
+#         
+# You can initialize it to zeros when providing it as first input, and you can create this zeros from the hidden 
+# state tensor, using the torch.zeros_like method.
+#
+# https://pytorch.org/docs/stable/generated/torch.zeros_like.html
+#     
+# 2. When implementing the models without attention, you actually need the final hidden state ("encoder_final") produced by the rnn.
+# Just incorporate the forward_step function to provide this tensor as an input. You can use the 
+# "tensor.size()" methods to check size, and you need the "tensor.swap(0,1)" method call to swap the first to 
+# axes of this tensor, when using it as a context vector.
+#
 
 # %%
 bilstm_with_atttention_model = make_model(ModelType.BILSTM_WITH_ATTENTION,
@@ -1719,7 +1725,7 @@ bigru_model = make_model(ModelType.BIGRU,
 dev_perplexities = train(bigru_model, print_every=100)
 
 # %%
-plot_perplexity(bigru_model)
+plot_perplexity(dev_perplexities)
 
 # %%
 bilstm_model = make_model(ModelType.BILSTM,
@@ -1729,7 +1735,7 @@ bilstm_model = make_model(ModelType.BILSTM,
 dev_perplexities = train(bilstm_model, print_every=100)
 
 # %%
-plot_perplexity(bilstm_model)
+plot_perplexity(dev_perplexities)
 
 
 # %%
@@ -1767,18 +1773,19 @@ def evaluate_model(model):
     print(len(hypotheses))
     print(hypotheses[0])
 
-    for hypothesis in hypotheses:
-        print("hypothesis: " + str(hypothesis))
+    
+    #print("references: " + str(references))
+#     for hypothesis in hypotheses:
+#         print("hypothesis: " + str(hypothesis))
 
     # remove empty elements    
     hypotheses =  [x for x in hypotheses if x]
     
     # now we can compute the BLEU score!
     bleu = sacrebleu.raw_corpus_bleu(hypotheses, [references], .01).score
-    print(bleu)
+    print("BLEU score: " + str(bleu))
 
-    #print("references: " + str(references))
-
+   
 
 
 # %% [markdown]
@@ -1787,11 +1794,15 @@ def evaluate_model(model):
 # determine and compare the performance of the four different model variants
 
 # %%
+#print("Evaluate BiGRU with attention model")
 #evaluate_model(bigru_with_atttention_model)
 # The last three models will not work yet, you will have to augment the code to get them to work!
+print("Evaluate BiLSTM with attention model...")
 evaluate_model(bilstm_with_atttention_model)
+print("Evaluate BiGRU model...")
 #evaluate_model(bigru)
-#evaluate_model(bilstm)
+print("Evaluate BiLSTM model...")
+evaluate_model(bilstm_model)
 
 # %% [markdown]
 # # Congratulations! You've finished this notebook.
