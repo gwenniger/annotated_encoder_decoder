@@ -177,9 +177,9 @@ class EncoderDecoder(nn.Module):
         return self.encoder(self.src_embed(src), src_mask, src_lengths)
     
     def decode(self, encoder_hidden, encoder_final, src_mask, trg, trg_mask,
-               decoder_hidden=None):
+               decoder_hidden=None, decoder_cell_state=None):
         return self.decoder(self.trg_embed(trg), encoder_hidden, encoder_final,
-                            src_mask, trg_mask, hidden=decoder_hidden)
+                            src_mask, trg_mask, hidden=decoder_hidden, cell_state=decoder_cell_state)
 
 
 # %% [markdown]
@@ -250,9 +250,8 @@ class Encoder(nn.Module):
             self.rnn = nn.GRU(input_size, hidden_size, num_layers, 
                               batch_first=True, bidirectional=True, dropout=dropout)
         elif model_type == ModelType.BILSTM_WITH_ATTENTION or model_type == ModelType.BILSTM:
-            # TODO: implement this - note that in both cases, with or without attention, 
-            # the encoder model is the same
-            raise RuntimeError("Error: Not implemented!")            
+            self.rnn = nn.LSTM(input_size, hidden_size, num_layers, 
+                              batch_first=True, bidirectional=True, dropout=dropout)   
         else:
             raise RuntimeError("Error: unknown model type: " + str(model_type))
         
@@ -263,7 +262,11 @@ class Encoder(nn.Module):
         x should have dimensions [batch, time, dim].
         """
         packed = pack_padded_sequence(x, lengths, batch_first=True)
-        output, final = self.rnn(packed)
+        if isinstance(self.rnn, nn.GRU):
+            output, final = self.rnn(packed)
+        else:
+            #For LSTM type
+            output, (final, _) = self.rnn(packed)
         output, _ = pad_packed_sequence(output, batch_first=True)
 
         # we need to manually concatenate the final states for both directions
@@ -309,9 +312,8 @@ class Decoder(nn.Module):
               batch_first=True, dropout=dropout)            
         elif model_type == ModelType.BILSTM_WITH_ATTENTION or model_type == ModelType.BILSTM:
             # Whether we use attention or not, the rnn is the same (of type LSTM)
-            assert(self.attention is None)
-            raise RuntimeError("Error: Not implemented!")
-            # TODO: implement this
+            self.rnn = nn.LSTM(emb_size + 2*hidden_size, hidden_size, num_layers,
+              batch_first=True, dropout=dropout)            
         else:
             raise RuntimeError("Error: unknown model type: " + str(model_type))
         
@@ -330,7 +332,7 @@ class Decoder(nn.Module):
         self.pre_output_layer = nn.Linear(hidden_size + 2*hidden_size + emb_size,
                                           hidden_size, bias=False)
         
-    def forward_step(self, prev_embed, encoder_hidden, src_mask, proj_key, hidden):
+    def forward_step(self, prev_embed, encoder_hidden, src_mask, proj_key, hidden, cell_state):
         """Perform a single decoder step (1 word)"""
 
         # compute context vector using attention mechanism
@@ -346,16 +348,23 @@ class Decoder(nn.Module):
 
         # update rnn hidden state
         rnn_input = torch.cat([prev_embed, context], dim=2)
-        output, hidden = self.rnn(rnn_input, hidden)
+        
+        if isinstance(self.rnn, nn.GRU):
+            output, hidden = self.rnn(rnn_input, hidden)
+        else:
+            #For LSTM type
+            output, (hidden, cell_state) = self.rnn(rnn_input, (hidden, cell_state))
+        
         
         pre_output = torch.cat([prev_embed, output, context], dim=2)
         pre_output = self.dropout_layer(pre_output)
         pre_output = self.pre_output_layer(pre_output)
 
-        return output, hidden, pre_output
+        return output, hidden, pre_output, cell_state
     
     def forward(self, trg_embed, encoder_hidden, encoder_final, 
-                src_mask, trg_mask, hidden=None, max_len=None):
+                src_mask, trg_mask, hidden=None, cell_state=None, 
+                max_len=None):
         """Unroll the decoder one step at a time."""
                                          
         # the maximum number of steps to unroll the RNN
@@ -365,6 +374,9 @@ class Decoder(nn.Module):
         # initialize decoder hidden state
         if hidden is None:
             hidden = self.init_hidden(encoder_final)
+        # initialize decoder cell state
+        if cell_state is None:
+            cell_state = torch.zeros_like(hidden)
         
         # pre-compute projected encoder hidden states
         # (the "keys" for the attention mechanism)
@@ -387,8 +399,8 @@ class Decoder(nn.Module):
 #             print("proj_key.size(): " + str(proj_key.size()))
 #             print("hidden.size(): " + str(hidden.size()))
             
-            output, hidden, pre_output = self.forward_step(
-              prev_embed, encoder_hidden, src_mask, proj_key, hidden)
+            output, hidden, pre_output, cell_state = self.forward_step(
+              prev_embed, encoder_hidden, src_mask, proj_key, hidden, cell_state)
             decoder_states.append(output)
             pre_output_vectors.append(pre_output)
 
@@ -685,12 +697,13 @@ def greedy_decode(model, src, src_mask, src_lengths, max_len=100, sos_index=1, e
     output = []
     attention_scores = []
     hidden = None
+    cell_state = None
 
     for i in range(max_len):
         with torch.no_grad():
             out, hidden, pre_output = model.decode(
               encoder_hidden, encoder_final, src_mask,
-              prev_y, trg_mask, hidden)
+              prev_y, trg_mask, hidden, cell_state)
 
             # we predict from the pre-output layer, which is
             # a combination of Decoder state, prev emb, and context
@@ -1650,23 +1663,32 @@ print("ref", trg)
 print("pred", pred)
 plot_heatmap(src, pred, pred_att)
 
-# %% [markdown]
-# ## Exercise: Experiments with different model types
-#
-# >In this exercise you will test different variants of the BiGRU-with-attention model, namely:
-# >>    1. A nearly identical model in which the the BiGRU is replaced with a BiLSTM
-# >>    2. A similar BiGRU model, but without attention. Instead of using a weighted mean of the hidden states of the 
-# >>       encoder, it just always uses the last state of the encoder.
-# >>    3. A BiLSTM model. Similar to 2, but using again a BiLSTM in place of a BiGRU.
-#
-# > To do so, you will have to adapt the Encoder and Decoder classes in the right manner, 
-# in order to implement these model variants.
-# > To get you started and limit the coding work, a code scaffolding has already been provided, with 
-# \#TODO and RuntimeErrors indicating places where the code should be adapted/augmented.
-#
+# %%
+## Exercise: Experiments with different model types
+
+>In this exercise you will test different variants of the BiGRU-with-attention model, namely:
+>>    1. A nearly identical model in which the the BiGRU is replaced with a BiLSTM
+>>    2. A similar BiGRU model, but without attention. Instead of using a weighted mean of the hidden states of the 
+>>       encoder, it just always uses the last state of the encoder.
+>>    3. A BiLSTM model. Similar to 2, but using again a BiLSTM in place of a BiGRU.
+
+> To do so, you will have to adapt the Encoder and Decoder classes in the right manner, 
+in order to implement these model variants.
+> To get you started and limit the coding work, a code scaffolding has already been provided, with 
+\#TODO and RuntimeErrors indicating places where the code should be adapted/augmented.
+
+Tips: The LSTM has a slightly different input and output as the GRU. In particular, it takes also a cell 
+state as input and produces ti as an output.
+See: https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html#torch.nn.LSTM
+        
+You can initialize it to zeros when providing it as first input, and you can create this zeros from the hidden 
+state tensor, using the torch.zeros_like method.
+
+https://pytorch.org/docs/stable/generated/torch.zeros_like.html
+
 
 # %%
-bilstm_with_atttention_model = make_model(ModelType.BIGRU_WITH_ATTENTION,
+bilstm_with_atttention_model = make_model(ModelType.BILSTM_WITH_ATTENTION,
                    len(vocab_src), len(vocab_tgt),
                    emb_size=256, hidden_size=256,
                    num_layers=1, dropout=0.2)
