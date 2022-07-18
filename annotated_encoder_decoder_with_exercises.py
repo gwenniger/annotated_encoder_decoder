@@ -1730,11 +1730,15 @@ evaluate_model(model):
 # determine and compare the performance of the four different model variants
 
 # %%
+print("Evaluate BiGRU with attention model")
 evaluate_model(bigru_with_atttention_model)
 # The last three models will not work yet, you will have to augment the code to get them to work!
+print("Evaluate BiLSTM with attention model...")
 evaluate_model(bilstm_with_atttention_model)
-evaluate_model(bigru)
-evaluate_model(bilstm)
+print("Evaluate BiGRU model...")
+evaluate_model(bigru_model)
+print("Evaluate BiLSTM model...")
+evaluate_model(bilstm_model)
 
 # %% [markdown]
 # # Congratulations! You've finished this notebook.

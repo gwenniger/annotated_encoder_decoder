@@ -1786,7 +1786,7 @@ evaluate_model(bigru_with_atttention_model)
 print("Evaluate BiLSTM with attention model...")
 evaluate_model(bilstm_with_atttention_model)
 print("Evaluate BiGRU model...")
-evaluate_model(bigru)
+evaluate_model(bigru_model)
 print("Evaluate BiLSTM model...")
 evaluate_model(bilstm_model)
 
