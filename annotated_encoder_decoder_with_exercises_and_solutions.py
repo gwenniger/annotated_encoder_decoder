@@ -332,7 +332,7 @@ class Decoder(nn.Module):
         self.pre_output_layer = nn.Linear(hidden_size + 2*hidden_size + emb_size,
                                           hidden_size, bias=False)
         
-    def forward_step(self, prev_embed, encoder_hidden, src_mask, proj_key, hidden, cell_state):
+    def forward_step(self, prev_embed, encoder_hidden, src_mask, proj_key, hidden, cell_state, encoder_final):
         """Perform a single decoder step (1 word)"""
 
         # compute context vector using attention mechanism
@@ -343,8 +343,14 @@ class Decoder(nn.Module):
                 query=query, proj_key=proj_key,
                 value=encoder_hidden, mask=src_mask)
         else:
-            #TODO implement this!
-            raise RuntimeError("Error: forward step part not implemented")
+            #print("encoder_hidden.size(): " + str(encoder_hidden.size()))            
+            #print("encoder_final.size(): " + str(encoder_final.size()))
+            #print("prev_embed.size(): " + str(prev_embed.size()))
+            
+            # Simply use the final (hidden) state of the encoder as the context
+            # Found out by looking at the sizes, that we have to swap the first two axes
+            context = encoder_final.transpose(0,1)
+            #raise RuntimeError("Error: forward step part not implemented")
 
         # update rnn hidden state
         rnn_input = torch.cat([prev_embed, context], dim=2)
@@ -400,13 +406,13 @@ class Decoder(nn.Module):
 #             print("hidden.size(): " + str(hidden.size()))
             
             output, hidden, pre_output, cell_state = self.forward_step(
-              prev_embed, encoder_hidden, src_mask, proj_key, hidden, cell_state)
+              prev_embed, encoder_hidden, src_mask, proj_key, hidden, cell_state, encoder_final)
             decoder_states.append(output)
             pre_output_vectors.append(pre_output)
 
         decoder_states = torch.cat(decoder_states, dim=1)
         pre_output_vectors = torch.cat(pre_output_vectors, dim=1)
-        return decoder_states, hidden, pre_output_vectors  # [B, N, D]
+        return decoder_states, hidden, pre_output_vectors, cell_state  # [B, N, D]
 
     def init_hidden(self, encoder_final):
         """Returns the initial decoder state,
@@ -599,7 +605,7 @@ def run_epoch(data_iter, model, loss_compute, print_every=50):
 #         if i > 10:
 #             break
         
-        out, _, pre_output = model.forward(batch.src, batch.trg,
+        out, _, pre_output, _ = model.forward(batch.src, batch.trg,
                                            batch.src_mask, batch.trg_mask,
                                            batch.src_lengths, batch.trg_lengths)
         loss = loss_compute(pre_output, batch.trg_y, batch.nseqs)
@@ -701,7 +707,7 @@ def greedy_decode(model, src, src_mask, src_lengths, max_len=100, sos_index=1, e
 
     for i in range(max_len):
         with torch.no_grad():
-            out, hidden, pre_output = model.decode(
+            out, hidden, pre_output, cell_state = model.decode(
               encoder_hidden, encoder_final, src_mask,
               prev_y, trg_mask, hidden, cell_state)
 
@@ -713,7 +719,8 @@ def greedy_decode(model, src, src_mask, src_lengths, max_len=100, sos_index=1, e
         next_word = next_word.data.item()
         output.append(next_word)
         prev_y = torch.ones(1, 1).type_as(src).fill_(next_word)
-        attention_scores.append(model.decoder.attention.alphas.cpu().numpy())
+        if model.decoder.attention is not None:
+            attention_scores.append(model.decoder.attention.alphas.cpu().numpy())
     
     output = np.array(output)
         
@@ -724,7 +731,10 @@ def greedy_decode(model, src, src_mask, src_lengths, max_len=100, sos_index=1, e
         if len(first_eos) > 0:
             output = output[:first_eos[0]]      
     
-    return output, np.concatenate(attention_scores, axis=1)
+    if len(attention_scores) > 0:
+        return output, np.concatenate(attention_scores, axis=1)
+    else:
+        return output, None
   
 
 def lookup_words(x, vocab=None):
@@ -1695,6 +1705,9 @@ bilstm_with_atttention_model = make_model(ModelType.BILSTM_WITH_ATTENTION,
 dev_perplexities = train(bilstm_with_atttention_model, print_every=100)
 
 # %%
+plot_perplexity(dev_perplexities)
+
+# %%
 # plot_perplexity(bilstm_with_atttention_model)
 print(ModelType.BIGRU)
 
@@ -1718,10 +1731,11 @@ dev_perplexities = train(bilstm_model, print_every=100)
 # %%
 plot_perplexity(bilstm_model)
 
+
 # %%
-evaluate_model(model):
+def evaluate_model(model):
     """
-    The code from above was collected together into a mehtod, parametrized by the model.
+    The code from above was collected together into a method, parametrized by the model.
     This way, we can easilly computer performance for different models for comparison
     """
     hypotheses_idx = []
@@ -1763,6 +1777,8 @@ evaluate_model(model):
     bleu = sacrebleu.raw_corpus_bleu(hypotheses, [references], .01).score
     print(bleu)
 
+    #print("references: " + str(references))
+
 
 
 # %% [markdown]
@@ -1771,11 +1787,11 @@ evaluate_model(model):
 # determine and compare the performance of the four different model variants
 
 # %%
-evaluate_model(bigru_with_atttention_model)
+#evaluate_model(bigru_with_atttention_model)
 # The last three models will not work yet, you will have to augment the code to get them to work!
 evaluate_model(bilstm_with_atttention_model)
-evaluate_model(bigru)
-evaluate_model(bilstm)
+#evaluate_model(bigru)
+#evaluate_model(bilstm)
 
 # %% [markdown]
 # # Congratulations! You've finished this notebook.
