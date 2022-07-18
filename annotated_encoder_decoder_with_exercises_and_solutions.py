@@ -1790,15 +1790,15 @@ def evaluate_model(model):
 # Having implemented the model code for the three different variants, you should be able to run the code below to 
 # determine and compare the performance of the four different model variants
 
-# %% [markdown]
-# print("Evaluate BiGRU with attention model")
-# evaluate_model(bigru_with_atttention_model)
-# print("Evaluate BiLSTM with attention model...")
-# evaluate_model(bilstm_with_atttention_model)
-# print("Evaluate BiGRU model...")
-# evaluate_model(bigru_model)
-# print("Evaluate BiLSTM model...")
-# evaluate_model(bilstm_model)
+# %%
+print("Evaluate BiGRU with attention model")
+evaluate_model(bigru_with_atttention_model)
+print("Evaluate BiLSTM with attention model...")
+evaluate_model(bilstm_with_atttention_model)
+print("Evaluate BiGRU model...")
+evaluate_model(bigru_model)
+print("Evaluate BiLSTM model...")
+evaluate_model(bilstm_model)
 
 # %% [markdown]
 # # Congratulations! You've finished this notebook.
