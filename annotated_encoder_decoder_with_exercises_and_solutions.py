@@ -1783,7 +1783,6 @@ def evaluate_model(model):
 # %%
 print("Evaluate BiGRU with attention model")
 evaluate_model(bigru_with_atttention_model)
-# The last three models will not work yet, you will have to augment the code to get them to work!
 print("Evaluate BiLSTM with attention model...")
 evaluate_model(bilstm_with_atttention_model)
 print("Evaluate BiGRU model...")

@@ -1511,15 +1511,9 @@ get_num_examples(valid_iter)
 
 # %%
 references_words = []
-for b in valid_dataloader:
-    #print("b " + str(b))
-    if b is not None:
-        batch = rebatch(PAD_INDEX, b)
-        # print("batch.trg.size():" + str(batch.trg.size()))
-        words = lookup_words(batch.trg[0][:], vocab_tgt)
-        references_words.append(words)
-    
 
+for words in get_examples_tgt(valid_iter, as_string=False):
+    references_words.append(words)
                           
 references = [" ".join(x) for x in references_words]                          
 
