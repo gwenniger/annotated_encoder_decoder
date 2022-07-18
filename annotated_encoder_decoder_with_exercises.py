@@ -1146,6 +1146,8 @@ def collate_batch(
 # %%
 import torchtext
 
+MAX_SOURC_AND_TARGET_LENGTH = 25
+
 def create_dataloaders(
     device,
     vocab_src,
@@ -1173,6 +1175,7 @@ def create_dataloaders(
             device,
             max_padding=max_padding,
             pad_id=vocab_src.get_stoi()["<blank>"],
+            max_length=MAX_SOURC_AND_TARGET_LENGTH
         )
 
     train_iter, valid_iter, test_iter = datasets.Multi30k(
@@ -1262,58 +1265,12 @@ train_dataloader, valid_dataloader, test_dataloader = create_dataloaders(
 from collections import Counter
 import spacy
 
-train_iter, valid_iter, test_iter = datasets.Multi30k(
-        language_pair=("de", "en"))
-train_iter_map = to_map_style_dataset(train_iter)
-valid_iter_map = to_map_style_dataset(valid_iter)
-test_iter_map = to_map_style_dataset(test_iter)
-
-def get_num_examples(dataloader):
-    result = 0
-    for b in dataloader:
-        batch = rebatch(PAD_INDEX, b)
-        if batch is not None:
-            result += len(batch.src_lengths)
-    return result
-            
-def get_examples_src_tgt(dataloader, as_string: bool = True):
-    """
-    This method essentially reconstructs the lists of words from the batches. This is necessary, because 
-    it is not straightforward to loop over the data otherwise, in a correct way. 
-    Esssentially we have the DataLoaders, 
-    and can get the batches from these, which is what we use here. 
-    """
-    result = 0
-    for b in dataloader:
-        batch = rebatch(PAD_INDEX, b)
-        if batch is not None:
-            #print("batch.src.size(): " + str(batch.src.size()))
-            #print("batch.tgt.size(): " + str(batch.trg.size()))
-            num_batch_examples = batch.src.size(0)
-            #print("num batch examples: " + str(num_batch_examples))
-            for example_index in range(0, num_batch_examples):
-                source_words = lookup_words(batch.src[example_index][:], vocab_src)
-                target_words = lookup_words(batch.trg[example_index][:], vocab_tgt)
-                if as_string:
-                    src_string =  " ".join(source_words)
-                    print("src_string:" + src_string)
-                    tgt_string =  " ".join(target_words)
-                    yield src_string, tgt_string
-                else:
-#                     print("source words: " + str(source_words))
-#                     print("target words: " + str(target_words))
-                    yield source_words, target_words
-                
-def get_examples_src(dataloader, as_string: bool = True):
-    for src, tgt in  get_examples_src_tgt(dataloader, as_string):
-        yield src
-        
-def get_examples_tgt(dataloader, as_string: bool = True):
-    for src, tgt in  get_examples_src_tgt(dataloader, as_string):
-        yield tgt
-                                             
 spacy_de = spacy.load("de_core_news_sm")
 spacy_en = spacy.load("en_core_web_sm")
+
+train_iter, valid_iter, test_iter = datasets.Multi30k(
+        language_pair=("de", "en"))
+
 
 def tokenize_de(text):
     return [tok.text for tok in spacy_de.tokenizer(text)]
@@ -1322,55 +1279,85 @@ def tokenize_en(text):
     return [tok.text for tok in spacy_en.tokenizer(text)]
 
 
+def source_and_target_words_lengths_below_maximum(
+    source_words: list, target_words: list, maximum: int):
+    return len(source_words) <= maximum and len(target_words) < maximum
+
+            
+def get_examples_src_tgt(data_iter, as_string: bool = True):
+    """
+    Convenience method for enumerating over items data_iter, including filtering on number of words
+    """
+    result = 0
+    for item in data_iter:
+        src_string = item[0]
+        tgt_string = item[1]
+        
+        #print("src_string: " + str(src_string))
+        source_words = tokenize_de(src_string)
+        target_words = tokenize_en(tgt_string)
+        
+        if not source_and_target_words_lengths_below_maximum(source_words, target_words, 
+            MAX_SOURC_AND_TARGET_LENGTH):
+            continue
+    
+        if as_string:
+            yield src_string, tgt_string
+        else:
+            
+#                     print("source words: " + str(source_words))
+#                     print("target words: " + str(target_words))
+            yield source_words, target_words
+
+def get_num_examples(data_iter):
+    return sum(1 for _ in get_examples_src_tgt(data_iter))
+    
+                
+def get_examples_src(data_iter, as_string: bool = True):
+    for src, tgt in  get_examples_src_tgt(data_iter, as_string):
+        yield src
+        
+def get_examples_tgt(data_iter, as_string: bool = True):
+    for src, tgt in  get_examples_src_tgt(data_iter, as_string):
+        yield tgt
+                                             
+
 def print_data_info(train_dataloader, valid_dataloader, test_dataloader):
     """ This prints some useful stuff about our data sets. """
 
     print("Data set sizes (number of sentence pairs):")
-    # These statistics are more reliable, since they do not count sentences that are actually skipped
-    print('train', get_num_examples(train_dataloader))
-    print('valid', get_num_examples(valid_dataloader))
-    print('test', get_num_examples(test_dataloader), "\n")
+
+#     for item in train_iter:
+#         print("item: " + str(item))
+
     # https://stackoverflow.com/questions/5384570/whats-the-shortest-way-to-count-the-number-of-items-in-a-generator-iterator
     # This we can still do with the basic dataset iterators
-#     print('train', sum(1 for _ in train_iter))
-#     print('valid', sum(1 for _ in valid_iter))
-#     print('test', sum(1 for _ in test_iter), "\n")
+    print("Original data. without filtering:")
+    print('train', sum(1 for _ in train_iter))
+    print('valid', sum(1 for _ in valid_iter))
+    print('test', sum(1 for _ in test_iter), "\n")
+    # These statistics are more reliable, since they do not count sentences that are actually skipped
+    print("When filtering for length -- as is actually done:")
+    print('train', get_num_examples(train_iter))
+    print('valid', get_num_examples(valid_iter))
+    print('test', get_num_examples(test_iter), "\n")
 
     print("First training example:")
-    print("(Retrieved from the batches of the dataloader)")
-#     print("src:", " ".join(vars(train_dataloader[0])['src']))
-#     print("trg:", " ".join(vars(train_dataloader[0])['trg']), "\n")
     #https://stackoverflow.com/questions/4741243/how-to-pick-just-one-item-from-a-generator
-    src_string, tgt_string = next(get_examples_src_tgt(train_dataloader, True))
+    src_string, tgt_string = next(get_examples_src_tgt(train_iter, True))
     print("src:",src_string , "\n")
     print("trg:", tgt_string, "\n")
     
-    
-    print("(directly from the train_iter)")
-    for source_target in train_iter:
-        print("src:",source_target[0] , "\n")
-        print("trg:", source_target[1], "\n")
-        break
-
     
     ### We use counters to get the frequencies, as frequencies are no longer available 
     ### in the vocabulary, in the newer PyTorch versions
     print("create counters...")
     source_counter = Counter()
     target_counter = Counter()
-    print("(We collect statistics for the validation set, to be faster)")
-    for _, (source_words, target_words) in enumerate(get_examples_src_tgt(valid_dataloader, False)):
+    for _, (source_words, target_words) in enumerate(get_examples_src_tgt(train_iter, False)):
         source_counter.update(source_words)
         target_counter.update(target_words)
 
-      # This gives somehow unexpected results: the first example is repeated every time somehow    
-#     for _, source_taget in enumerate(train_iter_map):
-#         source = source_target[0]
-#         target = source_target[1]
-#         print("source: " + str(source))
-#         print("target: " + str(target))
-#         source_counter.update(tokenize_de(source))
-#         target_counter.update(tokenize_en(target))
     
 #     print("\n".join(["%10s %10d" % x for x in vocab_src.freqs.most_common(10)]), "\n")
 #     print("Most common words (trg):")
@@ -1520,7 +1507,7 @@ print(bleu)
 # The references are the tokenized versions, but they should not contain out-of-vocabulary UNKs that our network might have seen. So we'll take the references straight out of the `valid_data` object:
 
 # %%
-get_num_examples(valid_dataloader)
+get_num_examples(valid_iter)
 
 # %%
 references_words = []
