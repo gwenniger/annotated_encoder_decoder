@@ -67,6 +67,13 @@
 #
 
 # %% [markdown]
+# ### Update model types
+#
+# >In this extended version of the original notebook we add exercises to vary the model type, in particular, 
+# >using a BiLSTM in place of a GRU and removing the attention mechanism from the model. The aim is to get a feeling 
+# >for how such model architecture changes work in practice and how they can influence the performance of the model.
+
+# %% [markdown]
 # # Prelims
 #
 # This tutorial requires **PyTorch >= 0.4.1** and was tested with **Python 3.6**.  
@@ -217,14 +224,37 @@ class Generator(nn.Module):
 # The code below reads in a source sentence (a sequence of word embeddings) and produces the hidden states.
 # It also returns a final vector, a summary of the complete sentence, by concatenating the first and the last hidden states (they have both seen the whole sentence, each in a different direction). We will use the final vector to initialize the decoder.
 
+# %% [markdown]
+# ### We add the model type in prepration for experiments with different model variants
+
+# %%
+from enum import Enum
+
+class ModelType(Enum):
+    BIGRU_WITH_ATTENTION = 1
+    BILSTM_WITH_ATTENTION = 2
+    BIGRU = 3 # A simple BiGRU, i.e. without attention
+    BILSTM = 4 # A simple BiLSTM, i.e. without attention
+
+
 # %%
 class Encoder(nn.Module):
     """Encodes a sequence of word embeddings"""
-    def __init__(self, input_size, hidden_size, num_layers=1, dropout=0.):
+    def __init__(self, input_size, hidden_size, num_layers=1, dropout=0., 
+                 model_type:ModelType=ModelType.BIGRU_WITH_ATTENTION):
         super(Encoder, self).__init__()
         self.num_layers = num_layers
-        self.rnn = nn.GRU(input_size, hidden_size, num_layers, 
-                          batch_first=True, bidirectional=True, dropout=dropout)
+        
+        if model_type == ModelType.BIGRU_WITH_ATTENTION or model_type == ModelType.BIGRU:
+            # The encoder model is the same (GRU) both for BiGRU with attention and without attention
+            self.rnn = nn.GRU(input_size, hidden_size, num_layers, 
+                              batch_first=True, bidirectional=True, dropout=dropout)
+        elif model_type == ModelType.BILSTM_WITH_ATTENTION or model_type == ModelType.BILSTM:
+            # TODO: implement this - note that in both cases, with or without attention, 
+            # the encoder model is the same
+            raise RuntimeError("Error: Not implemented!")            
+        else:
+            raise RuntimeError("Error: unknown model type: " + str(model_type))
         
     def forward(self, x, mask, lengths):
         """
@@ -263,6 +293,7 @@ class Decoder(nn.Module):
     """A conditional RNN decoder with attention."""
     
     def __init__(self, emb_size, hidden_size, attention, num_layers=1, dropout=0.5,
+                 model_type:ModelType=ModelType.BIGRU_WITH_ATTENTION,
                  bridge=True):
         super(Decoder, self).__init__()
         
@@ -271,9 +302,27 @@ class Decoder(nn.Module):
         self.attention = attention
         self.dropout = dropout
                  
-        self.rnn = nn.GRU(emb_size + 2*hidden_size, hidden_size, num_layers,
-                          batch_first=True, dropout=dropout)
-                 
+        
+        if model_type == ModelType.BIGRU_WITH_ATTENTION or model_type == ModelType.BIGRU:
+            # Whether we use attention or not, the rnn is the same (of type GRU)
+            self.rnn = nn.GRU(emb_size + 2*hidden_size, hidden_size, num_layers,
+              batch_first=True, dropout=dropout)            
+        elif model_type == ModelType.BILSTM_WITH_ATTENTION or model_type == ModelType.BILSTM:
+            # Whether we use attention or not, the rnn is the same (of type LSTM)
+            assert(self.attention is None)
+            raise RuntimeError("Error: Not implemented!")
+            # TODO: implement this
+        else:
+            raise RuntimeError("Error: unknown model type: " + str(model_type))
+        
+        
+        print("model_type: " + str(model_type))
+        if model_type == ModelType.BIGRU or model_type == ModelType.BILSTM:
+            # Attention must be set to none for these model types
+            if self.attention is not None:
+                raise RuntimeError("Error: self.attention must be none for the BIGRU and BILSTM model types")
+        
+
         # to initialize from the final encoder state
         self.bridge = nn.Linear(2*hidden_size, hidden_size, bias=True) if bridge else None
 
@@ -286,9 +335,14 @@ class Decoder(nn.Module):
 
         # compute context vector using attention mechanism
         query = hidden[-1].unsqueeze(1)  # [#layers, B, D] -> [B, 1, D]
-        context, attn_probs = self.attention(
-            query=query, proj_key=proj_key,
-            value=encoder_hidden, mask=src_mask)
+        
+        if self.attention is not None:
+            context, attn_probs = self.attention(
+                query=query, proj_key=proj_key,
+                value=encoder_hidden, mask=src_mask)
+        else:
+            #TODO implement this!
+            raise RuntimeError("Error: forward step part not implemented")
 
         # update rnn hidden state
         rnn_input = torch.cat([prev_embed, context], dim=2)
@@ -315,7 +369,9 @@ class Decoder(nn.Module):
         # pre-compute projected encoder hidden states
         # (the "keys" for the attention mechanism)
         # this is only done for efficiency
-        proj_key = self.attention.key_layer(encoder_hidden)
+        proj_key = None
+        if self.attention is not None:
+            proj_key = self.attention.key_layer(encoder_hidden)
         
         # here we store all intermediate hidden states and pre-output vectors
         decoder_states = []
@@ -431,17 +487,31 @@ class BahdanauAttention(nn.Module):
 # Here we define a function from hyperparameters to a full model. 
 
 # %%
-def make_model(src_vocab, tgt_vocab, emb_size=256, hidden_size=512, num_layers=1, dropout=0.1):
+
+def make_model(model_type:ModelType, src_vocab, tgt_vocab, emb_size=256, hidden_size=512, num_layers=1, dropout=0.1):
     "Helper: Construct a model from hyperparameters."
 
-    attention = BahdanauAttention(hidden_size)
+    
+    attention = None
+    
+    if model_type ==  ModelType.BIGRU_WITH_ATTENTION or  model_type == ModelType.BILSTM_WITH_ATTENTION:
+        attention = BahdanauAttention(hidden_size)
 
-    model = EncoderDecoder(
-        Encoder(emb_size, hidden_size, num_layers=num_layers, dropout=dropout),
-        Decoder(emb_size, hidden_size, attention, num_layers=num_layers, dropout=dropout),
-        nn.Embedding(src_vocab, emb_size),
-        nn.Embedding(tgt_vocab, emb_size),
-        Generator(hidden_size, tgt_vocab))
+    known_model_types = set([
+        ModelType.BIGRU_WITH_ATTENTION,
+        ModelType.BIGRU,
+        ModelType.BILSTM_WITH_ATTENTION,
+        ModelType.BILSTM])
+        
+    if model_type in known_model_types:
+        model = EncoderDecoder(
+            Encoder(emb_size, hidden_size, num_layers=num_layers, dropout=dropout, model_type=model_type),
+            Decoder(emb_size, hidden_size, attention, num_layers=num_layers, dropout=dropout, model_type=model_type),
+            nn.Embedding(src_vocab, emb_size),
+            nn.Embedding(tgt_vocab, emb_size),
+            Generator(hidden_size, tgt_vocab))
+    else:
+        raise RuntimeError("Error: unknown model type: " + str(model_type))
 
     return model.cuda() if USE_CUDA else model
 
@@ -706,7 +776,7 @@ def train_copy_task():
     """Train the simple copy task."""
     num_words = 11
     criterion = nn.NLLLoss(reduction="sum", ignore_index=0)
-    model = make_model(num_words, num_words, emb_size=32, hidden_size=64)
+    model = make_model(ModelType.BIGRU_WITH_ATTENTION, num_words, num_words, emb_size=32, hidden_size=64)
     optim = torch.optim.Adam(model.parameters(), lr=0.0003)
     eval_data = list(data_gen(num_words=num_words, batch_size=1, num_batches=100))
  
@@ -1405,10 +1475,11 @@ dir_path = os.path.dirname(os.path.realpath("."))
 print("dir_path: " + str(dir_path))
 
 # %%
-model = make_model(len(vocab_src), len(vocab_tgt),
+bigru_with_atttention_model = make_model(ModelType.BIGRU_WITH_ATTENTION,
+                   len(vocab_src), len(vocab_tgt),
                    emb_size=256, hidden_size=256,
                    num_layers=1, dropout=0.2)
-dev_perplexities = train(model, print_every=100)
+dev_perplexities = train(bigru_with_atttention_model, print_every=100)
 
 # %%
 plot_perplexity(dev_perplexities)
@@ -1449,7 +1520,7 @@ print(bleu)
 # The references are the tokenized versions, but they should not contain out-of-vocabulary UNKs that our network might have seen. So we'll take the references straight out of the `valid_data` object:
 
 # %%
-len(valid_dataloader)
+get_num_examples(valid_dataloader)
 
 # %%
 references_words = []
@@ -1496,7 +1567,7 @@ for batch in valid_dataloader:
     batch = rebatch(PAD_INDEX, batch)
     evaluation_inputs.append(batch.src)
     pred, attention = greedy_decode(
-    model, batch.src, batch.src_mask, batch.src_lengths, max_len=25,
+    bigru_with_atttention_model, batch.src, batch.src_mask, batch.src_lengths, max_len=25,
     sos_index=SPECIALS.index(SOS_TOKEN),
     eos_index=SPECIALS.index(EOS_TOKEN))
     hypotheses_idx.append(pred)
@@ -1578,6 +1649,111 @@ print("src", src)
 print("ref", trg)
 print("pred", pred)
 plot_heatmap(src, pred, pred_att)
+
+# %% [markdown]
+# ## Exercise: Experiments with different model types
+#
+# >In this exercise you will test different variants of the BiGRU-with-attention model, namely:
+# >>    1. A nearly identical model in which the the BiGRU is replaced with a BiLSTM
+# >>    2. A similar BiGRU model, but without attention. Instead of using a weighted mean of the hidden states of the 
+# >>       encoder, it just always uses the last state of the encoder.
+# >>    3. A BiLSTM model. Similar to 2, but using again a BiLSTM in place of a BiGRU.
+#
+# > To do so, you will have to adapt the Encoder and Decoder classes in the right manner, 
+# in order to implement these model variants.
+# > To get you started and limit the coding work, a code scaffolding has already been provided, with 
+# \#TODO and RuntimeErrors indicating places where the code should be adapted/augmented.
+#
+
+# %%
+bilstm_with_atttention_model = make_model(ModelType.BIGRU_WITH_ATTENTION,
+                   len(vocab_src), len(vocab_tgt),
+                   emb_size=256, hidden_size=256,
+                   num_layers=1, dropout=0.2)
+dev_perplexities = train(bilstm_with_atttention_model, print_every=100)
+
+# %%
+# plot_perplexity(bilstm_with_atttention_model)
+print(ModelType.BIGRU)
+
+# %%
+bigru_model = make_model(ModelType.BIGRU,
+                   len(vocab_src), len(vocab_tgt),
+                   emb_size=256, hidden_size=256,
+                   num_layers=1, dropout=0.2)
+dev_perplexities = train(bigru_model, print_every=100)
+
+# %%
+plot_perplexity(bigru_model)
+
+# %%
+bilstm_model = make_model(ModelType.BILSTM,
+                   len(vocab_src), len(vocab_tgt),
+                   emb_size=256, hidden_size=256,
+                   num_layers=1, dropout=0.2)
+dev_perplexities = train(bilstm_model, print_every=100)
+
+# %%
+plot_perplexity(bilstm_model)
+
+# %%
+evaluate_model(model):
+    """
+    The code from above was collected together into a mehtod, parametrized by the model.
+    This way, we can easilly computer performance for different models for comparison
+    """
+    hypotheses_idx = []
+    alphas = []  # save the last attention scores
+    evaluation_inputs = []  # Collect the evaluation inputs for later use
+    for batch in valid_dataloader:
+        if batch == None:
+            continue
+
+        batch = rebatch(PAD_INDEX, batch)
+        evaluation_inputs.append(batch.src)
+        pred, attention = greedy_decode(
+        model, batch.src, batch.src_mask, batch.src_lengths, max_len=25,
+        sos_index=SPECIALS.index(SOS_TOKEN),
+        eos_index=SPECIALS.index(EOS_TOKEN))
+        hypotheses_idx.append(pred)
+        alphas.append(attention)
+        
+    # we will still need to convert the indices to actual words!
+    hypotheses_idx[0]
+    
+    hypotheses_words = [lookup_words(x, vocab_tgt) for x in hypotheses_idx]
+    print("len(hypotheses): " + str(len(hypotheses_words)))
+    hypotheses_words[0]
+    
+    # finally, the SacreBLEU raw scorer requires string input, so we convert the lists to strings
+    hypotheses = [" ".join(x) for x in hypotheses_words]
+
+    print(len(hypotheses))
+    print(hypotheses[0])
+
+    for hypothesis in hypotheses:
+        print("hypothesis: " + str(hypothesis))
+
+    # remove empty elements    
+    hypotheses =  [x for x in hypotheses if x]
+    
+    # now we can compute the BLEU score!
+    bleu = sacrebleu.raw_corpus_bleu(hypotheses, [references], .01).score
+    print(bleu)
+
+
+
+# %% [markdown]
+# ## Model comparison
+# Having implemented the model code for the three different variants, you should be able to run the code below to 
+# determine and compare the performance of the four different model variants
+
+# %%
+evaluate_model(bigru_with_atttention_model)
+# The last three models will not work yet, you will have to augment the code to get them to work!
+evaluate_model(bilstm_with_atttention_model)
+evaluate_model(bigru)
+evaluate_model(bilstm)
 
 # %% [markdown]
 # # Congratulations! You've finished this notebook.
